@@ -83,7 +83,9 @@
 #define THRESHOLD          0.30f
 #define REFRESH_DELAY     10 //ms
 
-#define BOID_COUNT 65536
+#define BOID_COUNT 16384
+#define BOID_POS_SIZE (BOID_COUNT * 2)
+
 #define THREADS_PER_BLOCK 1024
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -96,9 +98,10 @@ GLuint vbo;
 struct cudaGraphicsResource *cuda_vbo_resource;
 void *d_vbo_buffer = NULL;
 
-float g_fAnim = 0.0;
 // boids
 BoidSoA d_boids;
+
+bool isActive = true;
 
 // mouse controls
 int mouse_old_x, mouse_old_y;
@@ -112,7 +115,7 @@ StopWatchInterface *timer = NULL;
 int fpsCount = 0;        // FPS count for averaging
 int fpsLimit = 1;        // FPS limit for sampling
 int g_Index = 0;
-float avgFPS = 0.0f;
+float avgFPS = 1.0f;
 unsigned int frameCount = 0;
 unsigned int g_TotalErrors = 0;
 bool g_bQAReadback = false;
@@ -341,7 +344,8 @@ bool initGL(int *argc, char **argv)
     }
 
     // default initialization
-    glClearColor(0.0, 0.0, 0.0, 1.0);
+    // background color (navy blue)
+    glClearColor(0.0, 0.0, 0.1, 1.0);
     glDisable(GL_DEPTH_TEST);
 
     // viewport
@@ -409,7 +413,11 @@ void runCuda(struct cudaGraphicsResource **vbo_resource)
                                                          *vbo_resource));
     //printf("CUDA mapped VBO: May access %ld bytes\n", num_bytes);
 
-    launch_kernel(d_boids, dptr, 0.01f);
+    if(isActive)
+    {
+        float dt = 0.015f;
+        launch_kernel(d_boids, dptr, dt);
+    }
 
     // unmap buffer object
     checkCudaErrors(cudaGraphicsUnmapResources(1, vbo_resource, 0));
@@ -428,7 +436,7 @@ void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
 
     // initialize buffer object
-    unsigned int size = BOID_COUNT * sizeof(float4);
+    unsigned int size = BOID_POS_SIZE * sizeof(float4);
     glBufferData(GL_ARRAY_BUFFER, size, 0, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -478,13 +486,13 @@ void display()
     glVertexPointer(4, GL_FLOAT, 0, 0);
 
     glEnableClientState(GL_VERTEX_ARRAY);
+    // color fish
     glColor3f(1.0, 1.0, 1.0);
-    glDrawArrays(GL_POINTS, 0,  BOID_COUNT);
+    // draw fish (head & tail) as line
+    glDrawArrays(GL_LINES, 0,  BOID_POS_SIZE);
     glDisableClientState(GL_VERTEX_ARRAY);
 
     glutSwapBuffers();
-
-    g_fAnim += 0.01f;
 
     sdkStopTimer(&timer);
     computeFPS();
@@ -521,6 +529,9 @@ void keyboard(unsigned char key, int /*x*/, int /*y*/)
     {
         case (27) :
             glutDestroyWindow(glutGetWindow());
+            return;
+        case ' ':
+            isActive = !isActive;
             return;
     }
 }

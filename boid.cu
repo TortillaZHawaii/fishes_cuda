@@ -161,5 +161,10 @@ __global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count)
     position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
 
     // write output vertex
-    pos[tid] = make_float4(position.x, position.y, position.z, 1.0f);
+    // head
+    pos[2 * tid] = make_float4(position.x, position.y, position.z, 1.0f);
+    // tail
+    float tailSize = 0.01f;
+    float3 tailPosition = position - heading * tailSize;
+    pos[2 * tid + 1] = make_float4(tailPosition.x, tailPosition.y, tailPosition.z, 1.0f);
 }
