@@ -47,12 +47,10 @@ __device__ float3 bound_position(float3 pos)
     return acc;
 }
 
-__device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, float3 position, int numPerceivedFlockmates)
+__device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
+    float3 position, int numPerceivedFlockmates, float separationWeight, float alignmentWeight, 
+    float cohesionWeight)
 {
-    const float separationWeight = 5.0f;
-    const float alignmentWeight = 5.0f;
-    const float cohesionWeight = 1.0f;
-
     flockHeading /= numPerceivedFlockmates;
 
     centreOfMassSum /= numPerceivedFlockmates;
@@ -67,7 +65,8 @@ __device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMas
     return acceleration;
 }
 
-__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count) 
+__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count, float separationWeight,
+    float alignmentWeight, float cohesionWeight) 
 {
     int tid = blockDim.x * blockIdx.x + threadIdx.x;
     if(tid >= count)
@@ -132,7 +131,7 @@ __global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count)
     if(hasNeighbors)
     {
         float3 acceleration = calculate_acceleration(flockHeading, centreOfMassSum, 
-            avoidance, position, numPerceivedFlockmates);
+            avoidance, position, numPerceivedFlockmates, separationWeight, alignmentWeight, cohesionWeight);
 
         velocity += acceleration * dt;
         velocity = limit3(velocity, maxSpeed);

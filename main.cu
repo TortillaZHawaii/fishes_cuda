@@ -101,7 +101,13 @@ void *d_vbo_buffer = NULL;
 // boids
 BoidSoA d_boids;
 
+// parameters
 bool isActive = true;
+float separationWeight = 5.0f;
+float alignmentWeight = 5.0f;
+float cohesionWeight = 1.0f;
+
+float animationSpeed = 0.01f;
 
 // mouse controls
 int mouse_old_x, mouse_old_y;
@@ -274,7 +280,8 @@ void launch_kernel(BoidSoA boidsoa, float4 *pos, float time)
     int boidCount = BOID_COUNT;
     int blocksCount = boidCount / THREADS_PER_BLOCK;
 
-    steerBoid<<<blocksCount, THREADS_PER_BLOCK>>>(boidsoa, pos, time, boidCount);
+    steerBoid<<<blocksCount, THREADS_PER_BLOCK>>>(boidsoa, pos, time, boidCount, separationWeight,
+        alignmentWeight, cohesionWeight);
 }
 
 
@@ -317,7 +324,8 @@ void computeFPS()
     }
 
     char fps[256];
-    sprintf(fps, "Cuda GL Interop (VBO): %3.1f fps (Max 100Hz)", avgFPS);
+    sprintf(fps, "Fishes Interop (VBO): %3.1f fps (Max 100Hz), cohesion (1,2): %3.1f, separation (3,4): %3.1f, alignment (5,6): %3.1f",
+        avgFPS, cohesionWeight, separationWeight, alignmentWeight);
     glutSetWindowTitle(fps);
 }
 
@@ -415,8 +423,7 @@ void runCuda(struct cudaGraphicsResource **vbo_resource)
 
     if(isActive)
     {
-        float dt = 0.015f;
-        launch_kernel(d_boids, dptr, dt);
+        launch_kernel(d_boids, dptr, animationSpeed);
     }
 
     // unmap buffer object
@@ -532,6 +539,38 @@ void keyboard(unsigned char key, int /*x*/, int /*y*/)
             return;
         case ' ':
             isActive = !isActive;
+            return;
+        // cohesionWeight
+        case '1':
+            cohesionWeight -= 0.1;
+            return;
+        case '2':
+            cohesionWeight += 0.1;
+            return;
+
+        // separationWeight
+        case '3':
+            separationWeight -= 0.1;
+            return;
+        case '4':
+            separationWeight += 0.1;
+            return;
+
+        // alignmentWeight
+        case '5':
+            alignmentWeight -= 0.1;
+            return;
+        case '6':
+            alignmentWeight += 0.1;
+            return;
+
+
+        // animationSpeed
+        case '7':
+            animationSpeed -= 0.001;
+            return;
+        case '8':
+            animationSpeed += 0.001;
             return;
     }
 }

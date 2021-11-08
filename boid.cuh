@@ -18,6 +18,7 @@ struct BoidSoA {
     float* velocitiesZ;
 };
 
-__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count);
+__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count, float separationWeight,
+    float alignmentWeight, float cohesionWeight);
 
 #endif
