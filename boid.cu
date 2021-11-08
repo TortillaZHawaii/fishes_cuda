@@ -9,48 +9,48 @@
 #include "boid.cuh"
 #include "floatmath.cuh"
 
-__device__ float3 bound_position(BoidSoA* boids, int boidIndex, float3 vel)
+__device__ float3 bound_position(float3 pos)
 {
-    float3 pos = make_float3(boids->positionsX[boidIndex], boids->positionsY[boidIndex], boids->positionsZ[boidIndex]);
+    float3 acc = zero3();
 
-    const float goBackSpeed = 10.0f;
-    const float min = -1.0f;
-    const float max = 1.0f;
+    const float goBackAcc = 4.0f;
+    const float min = -0.95f;
+    const float max = -min;
 
     if (pos.x < min)
     {
-        vel.x = goBackSpeed;
+        acc.x = goBackAcc;
     }
     else if (pos.x > max)
     {
-        vel.x = -goBackSpeed;
+        acc.x = -goBackAcc;
     }
 
     if(pos.y < min)
     {
-        vel.y = goBackSpeed;
+        acc.y = goBackAcc;
     }
     else if(pos.y > max)
     {
-        vel.y = -goBackSpeed;
+        acc.y = -goBackAcc;
     }
 
     if(pos.z < min)
     {
-        vel.z = goBackSpeed;
+        acc.z = goBackAcc;
     }
     else if(pos.z > max)
     {
-        vel.z = -goBackSpeed;
+        acc.z = -goBackAcc;
     }
 
-    return vel;
+    return acc;
 }
 
 __device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, float3 position, int numPerceivedFlockmates)
 {
-    const float separationWeight = 1.0f;
-    const float alignmentWeight = 1.0f;
+    const float separationWeight = 5.0f;
+    const float alignmentWeight = 5.0f;
     const float cohesionWeight = 1.0f;
 
     flockHeading /= numPerceivedFlockmates;
@@ -67,7 +67,7 @@ __device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMas
     return acceleration;
 }
 
-__global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count) 
+__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count) 
 {
     int tid = blockDim.x * blockIdx.x + threadIdx.x;
     if(tid >= count)
@@ -75,8 +75,8 @@ __global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count)
         return;
     }
 
-    const float viewRadius = 1.0f;
-    const float avoidRadius = 0.5f;
+    const float viewRadius = 0.1f;
+    const float avoidRadius = 0.05f;
 
     const float maxSpeed = 1.0f;
 
@@ -88,9 +88,9 @@ __global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count)
     int numPerceivedFlockmates = 0;
 
     // per boid
-    float3 position = make_float3(boids->positionsX[tid], boids->positionsY[tid], boids->positionsZ[tid]);
-    float3 velocity = make_float3(boids->velocitiesX[tid], boids->velocitiesY[tid], boids->velocitiesZ[tid]);
-    float3 heading = make_float3(boids->headingsX[tid], boids->headingsY[tid], boids->headingsZ[tid]);
+    float3 position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
+    float3 velocity = make_float3(boids.velocitiesX[tid], boids.velocitiesY[tid], boids.velocitiesZ[tid]);
+    float3 heading = make_float3(boids.headingsX[tid], boids.headingsY[tid], boids.headingsZ[tid]);
 
     // loop over all other boids
     for(int i = 0; i < count; ++i)
@@ -101,7 +101,7 @@ __global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count)
             continue;
         }
 
-        float3 otherPos = make_float3(boids->positionsX[i], boids->positionsY[i], boids->positionsZ[i]);
+        float3 otherPos = make_float3(boids.positionsX[i], boids.positionsY[i], boids.positionsZ[i]);
 
         float3 offset = otherPos - position;
 
@@ -116,14 +116,14 @@ __global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count)
         // in range boid other than ourself
         ++numPerceivedFlockmates;
 
-        float3 otherHeading = make_float3(boids->headingsX[i], boids->headingsY[i], boids->headingsZ[i]);
+        float3 otherHeading = make_float3(boids.headingsX[i], boids.headingsY[i], boids.headingsZ[i]);
         flockHeading += otherHeading;
         centreOfMassSum += otherPos;
 
         bool isInAvoidRange = sqrDistance < avoidRadius * avoidRadius;
         if(isInAvoidRange)
         {
-            avoidance += offset;
+            avoidance -= offset;
         }
     }
 
@@ -138,25 +138,28 @@ __global__ void steerBoid(BoidSoA* boids, float4* pos, float dt, int count)
         velocity = limit3(velocity, maxSpeed);
     }
 
-    velocity = bound_position(boids, tid, velocity);
+    float3 inBoundAcceleration = bound_position(position);
+    velocity += inBoundAcceleration * dt;
 
     // update position
-    boids->positionsX[tid] += velocity.x * dt;
-    boids->positionsY[tid] += velocity.y * dt;
-    boids->positionsZ[tid] += velocity.z * dt;
+    boids.positionsX[tid] += velocity.x * dt;
+    boids.positionsY[tid] += velocity.y * dt;
+    boids.positionsZ[tid] += velocity.z * dt;
 
     // update velocities
-    boids->velocitiesX[tid] = velocity.x;
-    boids->velocitiesY[tid] = velocity.y;
-    boids->velocitiesZ[tid] = velocity.z;
+    boids.velocitiesX[tid] = velocity.x;
+    boids.velocitiesY[tid] = velocity.y;
+    boids.velocitiesZ[tid] = velocity.z;
 
     // update heading
     heading = normalize(velocity);
 
-    boids->headingsX[tid] = heading.x;
-    boids->headingsY[tid] = heading.y;
-    boids->headingsZ[tid] = heading.z;
+    boids.headingsX[tid] = heading.x;
+    boids.headingsY[tid] = heading.y;
+    boids.headingsZ[tid] = heading.z;
+
+    position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
 
     // write output vertex
-    pos[tid] = make_float4(boids->positionsX[tid], boids->positionsY[tid], boids->positionsZ[tid], 1.0f);
+    pos[tid] = make_float4(position.x, position.y, position.z, 1.0f);
 }

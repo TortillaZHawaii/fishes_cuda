@@ -3,7 +3,7 @@
 
 __device__ float3 zero3()
 {
-    return make_float3(0.0f, 0.0f, 0.0f);
+    return make_float3(0.0f);
 }
 
 __device__ float3 limit3(const float3 a, const float max)

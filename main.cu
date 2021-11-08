@@ -75,6 +75,7 @@
 #include <helper_cuda.h>         // helper functions for CUDA error check
 
 #include <vector_types.h>
+#include <helper_math.h>
 
 #include "boid.cuh"
 
@@ -82,16 +83,13 @@
 #define THRESHOLD          0.30f
 #define REFRESH_DELAY     10 //ms
 
-#define BOID_COUNT 1024
+#define BOID_COUNT 65536
 #define THREADS_PER_BLOCK 1024
 
 ////////////////////////////////////////////////////////////////////////////////
 // constants
 const unsigned int window_width  = 512;
 const unsigned int window_height = 512;
-
-const unsigned int mesh_width    = 256;
-const unsigned int mesh_height   = 256;
 
 // vbo variables
 GLuint vbo;
@@ -100,8 +98,7 @@ void *d_vbo_buffer = NULL;
 
 float g_fAnim = 0.0;
 // boids
-BoidSoA* d_boids;
-BoidSoA* h_boids;
+BoidSoA d_boids;
 
 // mouse controls
 int mouse_old_x, mouse_old_y;
@@ -149,51 +146,130 @@ void checkResultCuda(int argc, char **argv, const GLuint &vbo);
 
 const char *sSDKsample = "simpleGL (VBO)";
 
+float randFloatInRange(float min, float max)
+{
+    float random = ((float)rand()) / (float)RAND_MAX;
+    float diff = max - min;
+    float r = random * diff;
+    return min + r;
+}
+
+void randomizeBoids()
+{
+    BoidSoA h_boids;
+
+    h_boids.positionsX = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.positionsY = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.positionsZ = (float*)malloc(sizeof(float) * BOID_COUNT);
+
+    h_boids.velocitiesX = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.velocitiesY = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.velocitiesZ = (float*)malloc(sizeof(float) * BOID_COUNT);
+
+    h_boids.headingsX = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.headingsY = (float*)malloc(sizeof(float) * BOID_COUNT);
+    h_boids.headingsZ = (float*)malloc(sizeof(float) * BOID_COUNT);
+
+    if(h_boids.positionsX == NULL || h_boids.positionsY == NULL || h_boids.positionsZ == NULL ||
+       h_boids.velocitiesX == NULL || h_boids.velocitiesY == NULL || h_boids.velocitiesZ == NULL ||
+       h_boids.headingsX == NULL || h_boids.headingsY == NULL || h_boids.headingsZ == NULL)
+    {
+        printf("Error allocating memory for boids\n");
+        exit(EXIT_FAILURE);
+    }
+
+    const float max_velocity = 0.2f;
+
+    for(int i = 0; i < BOID_COUNT; i++)
+    {
+        h_boids.positionsX[i] = randFloatInRange(-1.0f, 1.0f);
+        h_boids.positionsY[i] = randFloatInRange(-1.0f, 1.0f);
+        h_boids.positionsZ[i] = randFloatInRange(-1.0f, 1.0f);
+
+        h_boids.velocitiesX[i] = randFloatInRange(-max_velocity, max_velocity);
+        h_boids.velocitiesY[i] = randFloatInRange(-max_velocity, max_velocity);
+        h_boids.velocitiesZ[i] = randFloatInRange(-max_velocity, max_velocity);
+
+        float3 heading = make_float3(h_boids.velocitiesX[i], h_boids.velocitiesY[i], h_boids.velocitiesZ[i]);
+        heading = normalize(heading);
+
+        h_boids.headingsX[i] = heading.x;
+        h_boids.headingsY[i] = heading.y;
+        h_boids.headingsZ[i] = heading.z;
+    }
+
+    checkCudaErrors(cudaMemcpy(d_boids.positionsX, h_boids.positionsX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.positionsY, h_boids.positionsY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.positionsZ, h_boids.positionsZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+
+    checkCudaErrors(cudaMemcpy(d_boids.velocitiesX, h_boids.velocitiesX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.velocitiesY, h_boids.velocitiesY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.velocitiesZ, h_boids.velocitiesZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+
+    checkCudaErrors(cudaMemcpy(d_boids.headingsX, h_boids.headingsX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.headingsY, h_boids.headingsY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_boids.headingsZ, h_boids.headingsZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+
+    free(h_boids.positionsX);
+    free(h_boids.positionsY);
+    free(h_boids.positionsZ);
+
+    free(h_boids.velocitiesX);
+    free(h_boids.velocitiesY);
+    free(h_boids.velocitiesZ);
+
+    free(h_boids.headingsX);
+    free(h_boids.headingsY);
+    free(h_boids.headingsZ);
+}
+
 void createBoids()
 {
-    BoidSoA* boidsoa = new BoidSoA();
-
-    printf("Dupa 1\n");
-    checkCudaErrors(cudaMalloc(&d_boids, sizeof(BoidSoA)));
-    printf("Dupa 2\n");
-
-    checkCudaErrors(cudaMalloc(&d_boids->headingsX, sizeof(float) * BOID_COUNT));
-    cudaMalloc(&d_boids->headingsY, sizeof(float) * BOID_COUNT);
-    cudaMalloc(&d_boids->headingsZ, sizeof(float) * BOID_COUNT);
+    checkCudaErrors(cudaMalloc(&d_boids.headingsX, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.headingsY, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.headingsZ, sizeof(float) * BOID_COUNT));
     
-    cudaMalloc(&d_boids->positionsX, sizeof(float) * BOID_COUNT);
-    cudaMalloc(&d_boids->positionsY, sizeof(float) * BOID_COUNT);
-    cudaMalloc(&d_boids->positionsZ, sizeof(float) * BOID_COUNT);
+    checkCudaErrors(cudaMalloc(&d_boids.positionsX, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.positionsY, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.positionsZ, sizeof(float) * BOID_COUNT));
 
-    cudaMalloc(&d_boids->velocitiesX, sizeof(float) * BOID_COUNT);
-    cudaMalloc(&d_boids->velocitiesY, sizeof(float) * BOID_COUNT);
-    cudaMalloc(&d_boids->velocitiesZ, sizeof(float) * BOID_COUNT);
-    printf("Dupa 3\n");
+    cudaMemset(d_boids.headingsX, 0, sizeof(float) * BOID_COUNT);
+    cudaMemset(d_boids.headingsY, 0, sizeof(float) * BOID_COUNT);
+    cudaMemset(d_boids.headingsZ, 0, sizeof(float) * BOID_COUNT);
 
+    cudaMemset(d_boids.positionsX, 0, sizeof(float) * BOID_COUNT);
+    cudaMemset(d_boids.positionsY, 0, sizeof(float) * BOID_COUNT);
+    cudaMemset(d_boids.positionsZ, 0, sizeof(float) * BOID_COUNT);
+
+    checkCudaErrors(cudaMalloc(&d_boids.velocitiesX, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.velocitiesY, sizeof(float) * BOID_COUNT));
+    checkCudaErrors(cudaMalloc(&d_boids.velocitiesZ, sizeof(float) * BOID_COUNT));
+
+    randomizeBoids();
 }
+
+
 
 void freeBoids()
 {
-    cudaFree(d_boids->headingsX);
-    cudaFree(d_boids->headingsY);
-    cudaFree(d_boids->headingsZ);
+    cudaFree(d_boids.headingsX);
+    cudaFree(d_boids.headingsY);
+    cudaFree(d_boids.headingsZ);
 
-    cudaFree(d_boids->positionsX);
-    cudaFree(d_boids->positionsY);
-    cudaFree(d_boids->positionsZ);
+    cudaFree(d_boids.positionsX);
+    cudaFree(d_boids.positionsY);
+    cudaFree(d_boids.positionsZ);
 
-    cudaFree(d_boids->velocitiesX);
-    cudaFree(d_boids->velocitiesY);
-    cudaFree(d_boids->velocitiesZ);
-
-    cudaFree(d_boids);
+    cudaFree(d_boids.velocitiesX);
+    cudaFree(d_boids.velocitiesY);
+    cudaFree(d_boids.velocitiesZ);
 }
 
-void launch_kernel(BoidSoA* boidsoa, float4 *pos, float time)
+void launch_kernel(BoidSoA boidsoa, float4 *pos, float time)
 {
     // execute the kernel
     int boidCount = BOID_COUNT;
-    int blocksCount = 1; //boidCount / THREADS_PER_BLOCK;
+    int blocksCount = boidCount / THREADS_PER_BLOCK;
 
     steerBoid<<<blocksCount, THREADS_PER_BLOCK>>>(boidsoa, pos, time, boidCount);
 }
@@ -333,7 +409,7 @@ void runCuda(struct cudaGraphicsResource **vbo_resource)
                                                          *vbo_resource));
     //printf("CUDA mapped VBO: May access %ld bytes\n", num_bytes);
 
-    launch_kernel(d_boids, dptr, 0.1f);
+    launch_kernel(d_boids, dptr, 0.01f);
 
     // unmap buffer object
     checkCudaErrors(cudaGraphicsUnmapResources(1, vbo_resource, 0));
@@ -352,7 +428,7 @@ void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
 
     // initialize buffer object
-    unsigned int size = mesh_width * mesh_height * 4 * sizeof(float);
+    unsigned int size = BOID_COUNT * sizeof(float4);
     glBufferData(GL_ARRAY_BUFFER, size, 0, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -402,8 +478,8 @@ void display()
     glVertexPointer(4, GL_FLOAT, 0, 0);
 
     glEnableClientState(GL_VERTEX_ARRAY);
-    glColor3f(1.0, 0.0, 0.0);
-    glDrawArrays(GL_POINTS, 0, mesh_width * mesh_height);
+    glColor3f(1.0, 1.0, 1.0);
+    glDrawArrays(GL_POINTS, 0,  BOID_COUNT);
     glDisableClientState(GL_VERTEX_ARRAY);
 
     glutSwapBuffers();
@@ -500,14 +576,6 @@ void checkResultCuda(int argc, char **argv, const GLuint &vbo)
         // map buffer object
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         float *data = (float *) glMapBuffer(GL_ARRAY_BUFFER, GL_READ_ONLY);
-
-        // check result
-        if (checkCmdLineFlag(argc, (const char **) argv, "regression"))
-        {
-            // write file for regression test
-            sdkWriteFile<float>("./data/regression.dat",
-                                data, mesh_width * mesh_height * 3, 0.0, false);
-        }
 
         // unmap GL buffer object
         if (!glUnmapBuffer(GL_ARRAY_BUFFER))
