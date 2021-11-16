@@ -144,8 +144,8 @@ void checkResultCuda(int argc, char **argv, const GLuint &vbo);
 const char *sSDKsample = "fishes";
 
 float randFloatInRange(float min, float max);
-void randomizeBoids();
 void createBoids();
+void randomizeBoids();
 void freeBoids();
 
 void launch_kernel(BoidSoA boidsoa, float4 *pos, float time)

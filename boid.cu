@@ -47,7 +47,7 @@ __device__ float3 bound_position(float3 pos)
     return acc;
 }
 
-__device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
+__device__ float3 calculateAcceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
     float3 position, int numPerceivedFlockmates, float separationWeight, float alignmentWeight, 
     float cohesionWeight)
 {
@@ -65,7 +65,45 @@ __device__ float3 calculate_acceleration(float3 flockHeading, float3 centreOfMas
     return acceleration;
 }
 
-__global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count, float separationWeight,
+__device__ void updatePositionInSoA(BoidSoA boids, int tid, float3 offset)
+{
+    boids.positionsX[tid] += offset.x;
+    boids.positionsY[tid] += offset.y;
+    boids.positionsZ[tid] += offset.z;
+}
+
+__device__ void updateVelocityInSoA(BoidSoA boids, int tid, float3 velocity)
+{
+    boids.velocitiesX[tid] = velocity.x;
+    boids.velocitiesY[tid] = velocity.y;
+    boids.velocitiesZ[tid] = velocity.z;
+}
+
+__device__ void updateHeadingInSoA(BoidSoA boids, int tid, float3 velocity)
+{
+    float3 heading = normalize(velocity);
+
+    boids.headingsX[tid] = heading.x;
+    boids.headingsY[tid] = heading.y;
+    boids.headingsZ[tid] = heading.z;
+}
+
+__device__ void updateLinePosition(float4 *pos, BoidSoA boids, int tid)
+{
+    float3 position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
+    float3 heading = make_float3(boids.headingsX[tid], boids.headingsY[tid], boids.headingsZ[tid]);
+
+    // write output vertex
+    // head
+    pos[2 * tid] = make_float4(position.x, position.y, position.z, 1.0f);
+
+    // tail
+    const float tailSize = 0.01f;
+    float3 tailPosition = position - heading * tailSize;
+    pos[2 * tid + 1] = make_float4(tailPosition.x, tailPosition.y, tailPosition.z, 1.0f);
+}
+
+__global__ void steerBoid(BoidSoA boids, float4* linePos, float dt, int count, float separationWeight,
     float alignmentWeight, float cohesionWeight) 
 {
     int tid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -130,40 +168,21 @@ __global__ void steerBoid(BoidSoA boids, float4* pos, float dt, int count, float
     bool hasNeighbors = numPerceivedFlockmates > 0;
     if(hasNeighbors)
     {
-        float3 acceleration = calculate_acceleration(flockHeading, centreOfMassSum, 
-            avoidance, position, numPerceivedFlockmates, separationWeight, alignmentWeight, cohesionWeight);
+        float3 acceleration = calculateAcceleration(flockHeading, centreOfMassSum, 
+            avoidance, position, numPerceivedFlockmates, separationWeight, alignmentWeight,
+            cohesionWeight);
 
         velocity += acceleration * dt;
         velocity = limit3(velocity, maxSpeed);
     }
 
+    // keep in bounds force
     float3 inBoundAcceleration = bound_position(position);
     velocity += inBoundAcceleration * dt;
 
-    // update position
-    boids.positionsX[tid] += velocity.x * dt;
-    boids.positionsY[tid] += velocity.y * dt;
-    boids.positionsZ[tid] += velocity.z * dt;
+    updatePositionInSoA(boids, tid, velocity * dt);
+    updateVelocityInSoA(boids, tid, velocity);
+    updateHeadingInSoA(boids, tid, velocity);
 
-    // update velocities
-    boids.velocitiesX[tid] = velocity.x;
-    boids.velocitiesY[tid] = velocity.y;
-    boids.velocitiesZ[tid] = velocity.z;
-
-    // update heading
-    heading = normalize(velocity);
-
-    boids.headingsX[tid] = heading.x;
-    boids.headingsY[tid] = heading.y;
-    boids.headingsZ[tid] = heading.z;
-
-    position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
-
-    // write output vertex
-    // head
-    pos[2 * tid] = make_float4(position.x, position.y, position.z, 1.0f);
-    // tail
-    float tailSize = 0.01f;
-    float3 tailPosition = position - heading * tailSize;
-    pos[2 * tid + 1] = make_float4(tailPosition.x, tailPosition.y, tailPosition.z, 1.0f);
+    updateLinePosition(linePos, boids, tid);
 }
