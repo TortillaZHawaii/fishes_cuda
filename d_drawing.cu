@@ -34,6 +34,8 @@ void createBoids(BoidSoA *boids)
     checkCudaErrors(cudaMalloc(&boids->velocitiesY, sizeof(float) * BOID_COUNT));
     checkCudaErrors(cudaMalloc(&boids->velocitiesZ, sizeof(float) * BOID_COUNT));
 
+    checkCudaErrors(cudaMalloc(&boids->masses, sizeof(float) * BOID_COUNT));
+
     randomizeBoids(boids);
 }
 
@@ -54,15 +56,20 @@ void randomizeBoids(BoidSoA* boids)
     h_boids.headingsY = (float*)malloc(sizeof(float) * BOID_COUNT);
     h_boids.headingsZ = (float*)malloc(sizeof(float) * BOID_COUNT);
 
+    h_boids.masses = (float*)malloc(sizeof(float) * BOID_COUNT);
+
     if(h_boids.positionsX == NULL || h_boids.positionsY == NULL || h_boids.positionsZ == NULL ||
        h_boids.velocitiesX == NULL || h_boids.velocitiesY == NULL || h_boids.velocitiesZ == NULL ||
-       h_boids.headingsX == NULL || h_boids.headingsY == NULL || h_boids.headingsZ == NULL)
+       h_boids.headingsX == NULL || h_boids.headingsY == NULL || h_boids.headingsZ == NULL ||
+       h_boids.masses == NULL)
     {
         printf("Error allocating memory for boids\n");
         exit(EXIT_FAILURE);
     }
 
     const float max_velocity = 0.2f;
+    const float min_mass = 0.5f;
+    const float max_mass = 10.0f;
 
     for(int i = 0; i < BOID_COUNT; i++)
     {
@@ -73,6 +80,8 @@ void randomizeBoids(BoidSoA* boids)
         h_boids.velocitiesX[i] = randFloatInRange(-max_velocity, max_velocity);
         h_boids.velocitiesY[i] = randFloatInRange(-max_velocity, max_velocity);
         h_boids.velocitiesZ[i] = randFloatInRange(-max_velocity, max_velocity);
+
+        h_boids.masses[i] = randFloatInRange(min_mass, max_mass);
 
         float3 heading = make_float3(h_boids.velocitiesX[i], h_boids.velocitiesY[i], h_boids.velocitiesZ[i]);
         heading = normalize(heading);
@@ -94,6 +103,8 @@ void randomizeBoids(BoidSoA* boids)
     checkCudaErrors(cudaMemcpy(boids->headingsY, h_boids.headingsY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
     checkCudaErrors(cudaMemcpy(boids->headingsZ, h_boids.headingsZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
 
+    checkCudaErrors(cudaMemcpy(boids->masses, h_boids.masses, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
+
     free(h_boids.positionsX);
     free(h_boids.positionsY);
     free(h_boids.positionsZ);
@@ -105,6 +116,8 @@ void randomizeBoids(BoidSoA* boids)
     free(h_boids.headingsX);
     free(h_boids.headingsY);
     free(h_boids.headingsZ);
+
+    free(h_boids.masses);
 }
 
 // frees GPU memory
@@ -121,4 +134,6 @@ void freeBoids(BoidSoA* boids)
     checkCudaErrors(cudaFree(boids->velocitiesX));
     checkCudaErrors(cudaFree(boids->velocitiesY));
     checkCudaErrors(cudaFree(boids->velocitiesZ));
+
+    checkCudaErrors(cudaFree(boids->masses));
 }

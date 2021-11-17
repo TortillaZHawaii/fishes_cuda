@@ -4,8 +4,8 @@
 #include "floatmath.cuh"
 
 #define TRIANGLE_VERTICES_COUNT 3
-#define BOTTOM_VERTICES_COUNT TRIANGLE_VERTICES_COUNT // must be triangle
-#define NUMBER_OF_TRIANGLES (BOTTOM_VERTICES_COUNT + 1) // 1 for base
+#define BOTTOM_VERTICES_COUNT TRIANGLE_VERTICES_COUNT // must be a triangle
+#define NUMBER_OF_TRIANGLES (BOTTOM_VERTICES_COUNT + 1) // +1 for base
 #define VERTICES_TO_DRAW_PER_BOID (NUMBER_OF_TRIANGLES * 3)
 
 struct BoidSoA {
@@ -21,6 +21,8 @@ struct BoidSoA {
     float* velocitiesX;
     float* velocitiesY;
     float* velocitiesZ;
+
+    float* masses;
 };
 
 __device__ __host__ void steerBoid(int id, BoidSoA boids, float4* linePos, float dt, int count, 

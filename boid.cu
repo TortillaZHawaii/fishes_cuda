@@ -47,7 +47,7 @@ __device__ __host__ float3 bound_position(float3 pos)
     return acc;
 }
 
-__device__ __host__ float3 calculateAcceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
+__device__ __host__ float3 calculateForce(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
     float3 position, int numPerceivedFlockmates, float separationWeight, float alignmentWeight, 
     float cohesionWeight)
 {
@@ -60,9 +60,9 @@ __device__ __host__ float3 calculateAcceleration(float3 flockHeading, float3 cen
     float3 alignment = limit3(flockHeading, 1.f) * alignmentWeight;
     float3 cohesion = limit3(centreOfMassSum, 1.f) * cohesionWeight;
 
-    float3 acceleration = separation + alignment + cohesion;
+    float3 force = separation + alignment + cohesion;
 
-    return acceleration;
+    return force;
 }
 
 __device__ __host__ void updatePositionInSoA(BoidSoA boids, int tid, float3 offset)
@@ -123,7 +123,7 @@ __device__ __host__ void updatePyramidPosition(float4* pos, BoidSoA boids, int t
 
     // head
     const float length = 0.015f;
-    float3 headPosition = position + heading * length;
+    float3 headPosition = position + heading * length * sqrtf(boids.masses[tid]);
     float4 bottomPoints4[BOTTOM_VERTICES_COUNT];
 
     // tail
@@ -171,6 +171,7 @@ __device__ __host__ void steerBoid(int id, BoidSoA boids, float4* linePos, float
     float3 position = make_float3(boids.positionsX[id], boids.positionsY[id], boids.positionsZ[id]);
     float3 velocity = make_float3(boids.velocitiesX[id], boids.velocitiesY[id], boids.velocitiesZ[id]);
     float3 heading = make_float3(boids.headingsX[id], boids.headingsY[id], boids.headingsZ[id]);
+    float mass = boids.masses[id];
 
     // loop over all other boids
     for(int i = 0; i < count; ++i)
@@ -211,17 +212,19 @@ __device__ __host__ void steerBoid(int id, BoidSoA boids, float4* linePos, float
     bool hasNeighbors = numPerceivedFlockmates > 0;
     if(hasNeighbors)
     {
-        float3 acceleration = calculateAcceleration(flockHeading, centreOfMassSum, 
+        float3 force = calculateForce(flockHeading, centreOfMassSum, 
             avoidance, position, numPerceivedFlockmates, separationWeight, alignmentWeight,
             cohesionWeight);
+        
+        float3 acceleration = force * mass;
 
         velocity += acceleration * dt;
         velocity = limit3(velocity, maxSpeed);
     }
 
     // keep in bounds force
-    float3 inBoundAcceleration = bound_position(position);
-    velocity += inBoundAcceleration * dt;
+    float3 inBoundForce = bound_position(position);
+    velocity += inBoundForce / mass * dt;
 
     updatePositionInSoA(boids, id, velocity * dt);
     updateVelocityInSoA(boids, id, velocity);
