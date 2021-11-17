@@ -1,0 +1,7 @@
+#ifndef DEFINES_H
+#define DEFINES_H
+
+#define THREADS_PER_BLOCK 1024
+#define BOID_COUNT 50 * THREADS_PER_BLOCK
+
+#endif // DEFINES_H

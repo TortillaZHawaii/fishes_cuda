@@ -62,19 +62,26 @@
 #include <vector_types.h>
 #include <helper_math.h>
 
+#include "defines.cuh"
 #include "boid.cuh"
+
+//#define CPU
+#ifdef CPU
+    #include "h_drawing.cuh" // host
+#else
+    #define GPU
+    #include "d_drawing.cuh" // device
+#endif // CPU
 
 #define MAX_EPSILON_ERROR 10.0f
 #define THRESHOLD          0.30f
 #define REFRESH_DELAY     10 //ms
 
-#define THREADS_PER_BLOCK 1024
-#define BOID_COUNT 10 * THREADS_PER_BLOCK
-#define BOID_POS_SIZE (BOID_COUNT * 2)
 #define IS_BLOCK_NOT_FILLED (BOID_COUNT % THREADS_PER_BLOCK)
 #define BLOCKS_COUNT (BOID_COUNT / THREADS_PER_BLOCK + IS_BLOCK_NOT_FILLED)
 
-////////////////////////////////////////////////////////////////////////////////
+#define BOID_VERTICES_COUNT (BOID_COUNT * VERTICES_TO_DRAW_PER_BOID)
+
 // constants
 const unsigned int window_width  = 512;
 const unsigned int window_height = 512;
@@ -85,7 +92,7 @@ struct cudaGraphicsResource *cuda_vbo_resource;
 void *d_vbo_buffer = NULL;
 
 // boids
-BoidSoA d_boids;
+BoidSoA g_boids;
 
 // parameters
 // to pause and play the simulation
@@ -119,7 +126,6 @@ char **pArgv = NULL;
 
 #define MAX(a,b) ((a > b) ? a : b)
 
-////////////////////////////////////////////////////////////////////////////////
 // declaration, forward
 bool runTest(int argc, char **argv, char *ref_file);
 void cleanup();
@@ -137,20 +143,18 @@ void mouse(int button, int state, int x, int y);
 void motion(int x, int y);
 void timerEvent(int value);
 
+// CPU functionality
+void runCpu();
+
 // Cuda functionality
 void runCuda(struct cudaGraphicsResource **vbo_resource);
 void checkResultCuda(int argc, char **argv, const GLuint &vbo);
 
 const char *sSDKsample = "fishes";
 
-float randFloatInRange(float min, float max);
-void createBoids();
-void randomizeBoids();
-void freeBoids();
-
 void launch_kernel(BoidSoA boidsoa, float4 *pos, float time)
 {
-    steerBoid<<<BLOCKS_COUNT, THREADS_PER_BLOCK>>>(boidsoa, pos, time, BOID_COUNT, separationWeight,
+    d_steerBoid<<<BLOCKS_COUNT, THREADS_PER_BLOCK>>>(boidsoa, pos, time, BOID_COUNT, separationWeight,
         alignmentWeight, cohesionWeight);
 }
 
@@ -240,7 +244,7 @@ bool runTest(int argc, char **argv, char *ref_file)
 {
     // Create the CUTIL timer
     sdkCreateTimer(&timer);
-    createBoids();
+    createBoids(&g_boids);
 
     // use command-line specified CUDA device, otherwise use device with highest Gflops/s
     int devID = findCudaDevice(argc, (const char **)argv);
@@ -262,8 +266,12 @@ bool runTest(int argc, char **argv, char *ref_file)
     // create VBO
     createVBO(&vbo, &cuda_vbo_resource, cudaGraphicsMapFlagsWriteDiscard);
 
+#ifdef GPU
     // run the cuda part
     runCuda(&cuda_vbo_resource);
+#else
+    runCpu();
+#endif // GPU
 
     // start rendering mainloop
     glutMainLoop();
@@ -280,15 +288,34 @@ void runCuda(struct cudaGraphicsResource **vbo_resource)
     size_t num_bytes;
     checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&dptr, &num_bytes,
                                                          *vbo_resource));
-    //printf("CUDA mapped VBO: May access %ld bytes\n", num_bytes);
 
     if(isActive)
     {
-        launch_kernel(d_boids, dptr, animationSpeed);
+        launch_kernel(g_boids, dptr, animationSpeed);
     }
 
     // unmap buffer object
     checkCudaErrors(cudaGraphicsUnmapResources(1, vbo_resource, 0));
+}
+
+void runCpu()
+{
+    // map OpenGL buffer object for writing on CPU
+    float4 *dptr = (float4*)glMapBuffer(vbo, GL_READ_WRITE);
+
+    if(dptr == nullptr)
+    {
+        printf("Error: Failed to map VBO\n");
+        return;
+    }
+
+    if(isActive)
+    {
+        h_steerBoid(g_boids, dptr, animationSpeed, BOID_COUNT, separationWeight,
+            alignmentWeight, cohesionWeight);
+    }
+
+    glUnmapBuffer(vbo);
 }
 
 void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
@@ -301,21 +328,25 @@ void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
 
     // initialize buffer object
-    unsigned int size = BOID_POS_SIZE * sizeof(float4);
+    unsigned int size = BOID_VERTICES_COUNT * sizeof(float4);
     glBufferData(GL_ARRAY_BUFFER, size, 0, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+#ifdef GPU
     // register this buffer object with CUDA
     checkCudaErrors(cudaGraphicsGLRegisterBuffer(vbo_res, *vbo, vbo_res_flags));
+#endif // GPU
 
     SDK_CHECK_ERROR_GL();
 }
 
 void deleteVBO(GLuint *vbo, struct cudaGraphicsResource *vbo_res)
 {
+#ifdef GPU
     // unregister this buffer object with CUDA
     checkCudaErrors(cudaGraphicsUnregisterResource(vbo_res));
+#endif // GPU
 
     glBindBuffer(1, *vbo);
     glDeleteBuffers(1, vbo);
@@ -328,8 +359,13 @@ void display()
 {
     sdkStartTimer(&timer);
 
+#ifdef GPU
     // run CUDA kernel to generate vertex positions
     runCuda(&cuda_vbo_resource);
+#else
+    // run CPU to generate vertex positions
+    runCpu();
+#endif // GPU
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -347,8 +383,8 @@ void display()
     glEnableClientState(GL_VERTEX_ARRAY);
     // color fishes
     glColor3f(1.0, 1.0, 1.0);
-    // draw fishes (head & tail) as a line
-    glDrawArrays(GL_LINES, 0,  BOID_POS_SIZE);
+    // draw fishes (head & tail) as a triangle strip
+    glDrawArrays(GL_TRIANGLES, 0, BOID_VERTICES_COUNT);
     glDisableClientState(GL_VERTEX_ARRAY);
 
     glutSwapBuffers();
@@ -378,7 +414,7 @@ void cleanup()
         deleteVBO(&vbo, cuda_vbo_resource);
     }
 
-    freeBoids();
+    freeBoids(&g_boids);
 }
 
 // called when a key is pressed
@@ -465,10 +501,8 @@ void motion(int x, int y)
     mouse_old_y = y;
 }
 
-////////////////////////////////////////////////////////////////////////////////
 //! Check if the result is correct or write data to file for external
 //! regression testing
-////////////////////////////////////////////////////////////////////////////////
 void checkResultCuda(int argc, char **argv, const GLuint &vbo)
 {
     if (!d_vbo_buffer)
@@ -491,126 +525,4 @@ void checkResultCuda(int argc, char **argv, const GLuint &vbo)
 
         SDK_CHECK_ERROR_GL();
     }
-}
-
-
-// allocates memory for boids on GPU and initializes them with random values
-void createBoids()
-{
-    checkCudaErrors(cudaMalloc(&d_boids.headingsX, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.headingsY, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.headingsZ, sizeof(float) * BOID_COUNT));
-    
-    checkCudaErrors(cudaMalloc(&d_boids.positionsX, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.positionsY, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.positionsZ, sizeof(float) * BOID_COUNT));
-
-    cudaMemset(d_boids.headingsX, 0, sizeof(float) * BOID_COUNT);
-    cudaMemset(d_boids.headingsY, 0, sizeof(float) * BOID_COUNT);
-    cudaMemset(d_boids.headingsZ, 0, sizeof(float) * BOID_COUNT);
-
-    cudaMemset(d_boids.positionsX, 0, sizeof(float) * BOID_COUNT);
-    cudaMemset(d_boids.positionsY, 0, sizeof(float) * BOID_COUNT);
-    cudaMemset(d_boids.positionsZ, 0, sizeof(float) * BOID_COUNT);
-
-    checkCudaErrors(cudaMalloc(&d_boids.velocitiesX, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.velocitiesY, sizeof(float) * BOID_COUNT));
-    checkCudaErrors(cudaMalloc(&d_boids.velocitiesZ, sizeof(float) * BOID_COUNT));
-
-    randomizeBoids();
-}
-
-// generates random values for boids on CPU and copies them to GPU
-void randomizeBoids()
-{
-    BoidSoA h_boids;
-
-    h_boids.positionsX = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.positionsY = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.positionsZ = (float*)malloc(sizeof(float) * BOID_COUNT);
-
-    h_boids.velocitiesX = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.velocitiesY = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.velocitiesZ = (float*)malloc(sizeof(float) * BOID_COUNT);
-
-    h_boids.headingsX = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.headingsY = (float*)malloc(sizeof(float) * BOID_COUNT);
-    h_boids.headingsZ = (float*)malloc(sizeof(float) * BOID_COUNT);
-
-    if(h_boids.positionsX == NULL || h_boids.positionsY == NULL || h_boids.positionsZ == NULL ||
-       h_boids.velocitiesX == NULL || h_boids.velocitiesY == NULL || h_boids.velocitiesZ == NULL ||
-       h_boids.headingsX == NULL || h_boids.headingsY == NULL || h_boids.headingsZ == NULL)
-    {
-        printf("Error allocating memory for boids\n");
-        exit(EXIT_FAILURE);
-    }
-
-    const float max_velocity = 0.2f;
-
-    for(int i = 0; i < BOID_COUNT; i++)
-    {
-        h_boids.positionsX[i] = randFloatInRange(-1.0f, 1.0f);
-        h_boids.positionsY[i] = randFloatInRange(-1.0f, 1.0f);
-        h_boids.positionsZ[i] = randFloatInRange(-1.0f, 1.0f);
-
-        h_boids.velocitiesX[i] = randFloatInRange(-max_velocity, max_velocity);
-        h_boids.velocitiesY[i] = randFloatInRange(-max_velocity, max_velocity);
-        h_boids.velocitiesZ[i] = randFloatInRange(-max_velocity, max_velocity);
-
-        float3 heading = make_float3(h_boids.velocitiesX[i], h_boids.velocitiesY[i], h_boids.velocitiesZ[i]);
-        heading = normalize(heading);
-
-        h_boids.headingsX[i] = heading.x;
-        h_boids.headingsY[i] = heading.y;
-        h_boids.headingsZ[i] = heading.z;
-    }
-
-    checkCudaErrors(cudaMemcpy(d_boids.positionsX, h_boids.positionsX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.positionsY, h_boids.positionsY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.positionsZ, h_boids.positionsZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-
-    checkCudaErrors(cudaMemcpy(d_boids.velocitiesX, h_boids.velocitiesX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.velocitiesY, h_boids.velocitiesY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.velocitiesZ, h_boids.velocitiesZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-
-    checkCudaErrors(cudaMemcpy(d_boids.headingsX, h_boids.headingsX, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.headingsY, h_boids.headingsY, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_boids.headingsZ, h_boids.headingsZ, sizeof(float) * BOID_COUNT, cudaMemcpyHostToDevice));
-
-    free(h_boids.positionsX);
-    free(h_boids.positionsY);
-    free(h_boids.positionsZ);
-
-    free(h_boids.velocitiesX);
-    free(h_boids.velocitiesY);
-    free(h_boids.velocitiesZ);
-
-    free(h_boids.headingsX);
-    free(h_boids.headingsY);
-    free(h_boids.headingsZ);
-}
-
-// generates random value in range [min, max)
-float randFloatInRange(float min, float max)
-{
-    float random = ((float)rand()) / (float)RAND_MAX;
-    float diff = max - min;
-    float r = random * diff;
-    return min + r;
-}
-
-// frees GPU memory
-void freeBoids()
-{
-    cudaFree(d_boids.headingsX);
-    cudaFree(d_boids.headingsY);
-    cudaFree(d_boids.headingsZ);
-
-    cudaFree(d_boids.positionsX);
-    cudaFree(d_boids.positionsY);
-    cudaFree(d_boids.positionsZ);
-
-    cudaFree(d_boids.velocitiesX);
-    cudaFree(d_boids.velocitiesY);
-    cudaFree(d_boids.velocitiesZ);
 }

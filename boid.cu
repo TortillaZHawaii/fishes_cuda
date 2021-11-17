@@ -9,7 +9,7 @@
 #include "boid.cuh"
 #include "floatmath.cuh"
 
-__device__ float3 bound_position(float3 pos)
+__device__ __host__ float3 bound_position(float3 pos)
 {
     float3 acc = zero3();
 
@@ -47,7 +47,7 @@ __device__ float3 bound_position(float3 pos)
     return acc;
 }
 
-__device__ float3 calculateAcceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
+__device__ __host__ float3 calculateAcceleration(float3 flockHeading, float3 centreOfMassSum, float3 avoidance, 
     float3 position, int numPerceivedFlockmates, float separationWeight, float alignmentWeight, 
     float cohesionWeight)
 {
@@ -65,21 +65,21 @@ __device__ float3 calculateAcceleration(float3 flockHeading, float3 centreOfMass
     return acceleration;
 }
 
-__device__ void updatePositionInSoA(BoidSoA boids, int tid, float3 offset)
+__device__ __host__ void updatePositionInSoA(BoidSoA boids, int tid, float3 offset)
 {
     boids.positionsX[tid] += offset.x;
     boids.positionsY[tid] += offset.y;
     boids.positionsZ[tid] += offset.z;
 }
 
-__device__ void updateVelocityInSoA(BoidSoA boids, int tid, float3 velocity)
+__device__ __host__ void updateVelocityInSoA(BoidSoA boids, int tid, float3 velocity)
 {
     boids.velocitiesX[tid] = velocity.x;
     boids.velocitiesY[tid] = velocity.y;
     boids.velocitiesZ[tid] = velocity.z;
 }
 
-__device__ void updateHeadingInSoA(BoidSoA boids, int tid, float3 velocity)
+__device__ __host__ void updateHeadingInSoA(BoidSoA boids, int tid, float3 velocity)
 {
     float3 heading = normalize(velocity);
 
@@ -88,30 +88,73 @@ __device__ void updateHeadingInSoA(BoidSoA boids, int tid, float3 velocity)
     boids.headingsZ[tid] = heading.z;
 }
 
-__device__ void updateLinePosition(float4 *pos, BoidSoA boids, int tid)
+// adapted from https://www.freemancw.com/2012/06/opengl-cone-function/
+__device__ __host__ float3 perp(float3 v)
+{
+    float min = fabsf(v.x);
+    float3 cardinalAxis = make_float3(1.0f, 0.0f, 0.0f);
+
+    if (fabsf(v.y) < min)
+    {
+        min = fabsf(v.y);
+        cardinalAxis = make_float3(0.0f, 1.0f, 0.0f);
+    }
+
+    if (fabsf(v.z) < min)
+    {
+        cardinalAxis = make_float3(0.0f, 0.0f, 1.0f);
+    }
+
+    return cross(v, cardinalAxis);
+}
+
+// adapted from https://www.freemancw.com/2012/06/opengl-cone-function/
+__device__ __host__ void updatePyramidPosition(float4* pos, BoidSoA boids, int tid)
 {
     float3 position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
     float3 heading = make_float3(boids.headingsX[tid], boids.headingsY[tid], boids.headingsZ[tid]);
 
-    // write output vertex
+    float3 e0 = perp(heading);
+    float3 e1 = cross(e0, heading);
+    
+    const float angInc = 2 * M_PI / BOTTOM_VERTICES_COUNT;
+
+    int startId = tid * VERTICES_TO_DRAW_PER_BOID;
+
     // head
-    pos[2 * tid] = make_float4(position.x, position.y, position.z, 1.0f);
+    const float length = 0.015f;
+    float3 headPosition = position + heading * length;
+    float4 bottomPoints4[BOTTOM_VERTICES_COUNT];
 
     // tail
-    const float tailSize = 0.01f;
-    float3 tailPosition = position - heading * tailSize;
-    pos[2 * tid + 1] = make_float4(tailPosition.x, tailPosition.y, tailPosition.z, 1.0f);
-}
-
-__global__ void steerBoid(BoidSoA boids, float4* linePos, float dt, int count, float separationWeight,
-    float alignmentWeight, float cohesionWeight) 
-{
-    int tid = blockDim.x * blockIdx.x + threadIdx.x;
-    if(tid >= count)
+    const float tailSize = 0.008f;
+    for(int i = 0; i < BOTTOM_VERTICES_COUNT; ++i) // one extra to close the pyramid
     {
-        return;
+        float ang = i * angInc;
+        float3 bottomPoint = position + (e0 * cosf(ang) + e1 * sinf(ang)) * tailSize;
+        bottomPoints4[i] = make_float4(bottomPoint.x, bottomPoint.y, bottomPoint.z, 1.0f);
     }
 
+    // write output vertices
+    // base triangle
+    for(int i = 0; i < BOTTOM_VERTICES_COUNT; ++i)
+    {
+        pos[startId + i] = bottomPoints4[i];
+    }
+
+    float4 head4 = make_float4(headPosition.x, headPosition.y, headPosition.z, 1.0f);
+    // upper triangles
+    for(int i = 0; i < BOTTOM_VERTICES_COUNT; ++i)
+    {
+        pos[startId + (i + 1) * TRIANGLE_VERTICES_COUNT] = head4;
+        pos[startId + (i + 1) * TRIANGLE_VERTICES_COUNT + 1] = bottomPoints4[i];
+        pos[startId + (i + 1) * TRIANGLE_VERTICES_COUNT + 2] = bottomPoints4[(i + 1) % BOTTOM_VERTICES_COUNT];
+    }
+}
+
+__device__ __host__ void steerBoid(int id, BoidSoA boids, float4* linePos, float dt, int count, float separationWeight,
+    float alignmentWeight, float cohesionWeight)
+{
     const float viewRadius = 0.1f;
     const float avoidRadius = 0.05f;
 
@@ -125,14 +168,14 @@ __global__ void steerBoid(BoidSoA boids, float4* linePos, float dt, int count, f
     int numPerceivedFlockmates = 0;
 
     // per boid
-    float3 position = make_float3(boids.positionsX[tid], boids.positionsY[tid], boids.positionsZ[tid]);
-    float3 velocity = make_float3(boids.velocitiesX[tid], boids.velocitiesY[tid], boids.velocitiesZ[tid]);
-    float3 heading = make_float3(boids.headingsX[tid], boids.headingsY[tid], boids.headingsZ[tid]);
+    float3 position = make_float3(boids.positionsX[id], boids.positionsY[id], boids.positionsZ[id]);
+    float3 velocity = make_float3(boids.velocitiesX[id], boids.velocitiesY[id], boids.velocitiesZ[id]);
+    float3 heading = make_float3(boids.headingsX[id], boids.headingsY[id], boids.headingsZ[id]);
 
     // loop over all other boids
     for(int i = 0; i < count; ++i)
     {
-        bool isTheSameBoid = i == tid;
+        bool isTheSameBoid = i == id;
         if(isTheSameBoid)
         {
             continue;
@@ -180,9 +223,30 @@ __global__ void steerBoid(BoidSoA boids, float4* linePos, float dt, int count, f
     float3 inBoundAcceleration = bound_position(position);
     velocity += inBoundAcceleration * dt;
 
-    updatePositionInSoA(boids, tid, velocity * dt);
-    updateVelocityInSoA(boids, tid, velocity);
-    updateHeadingInSoA(boids, tid, velocity);
+    updatePositionInSoA(boids, id, velocity * dt);
+    updateVelocityInSoA(boids, id, velocity);
+    updateHeadingInSoA(boids, id, velocity);
 
-    updateLinePosition(linePos, boids, tid);
+    updatePyramidPosition(linePos, boids, id);
+}
+
+__global__ void d_steerBoid(BoidSoA boids, float4* linePos, float dt, int count, float separationWeight,
+    float alignmentWeight, float cohesionWeight) 
+{
+    int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    if(tid >= count)
+    {
+        return;
+    }
+
+    steerBoid(tid, boids, linePos, dt, count, separationWeight, alignmentWeight, cohesionWeight);
+}
+
+void h_steerBoid(BoidSoA boids, float4* pos, float dt, int count, float separationWeight,
+    float alignmentWeight, float cohesionWeight)
+{
+    for(int i = 0; i < count; ++i)
+    {
+        steerBoid(i, boids, pos, dt, count, separationWeight, alignmentWeight, cohesionWeight);
+    }
 }
