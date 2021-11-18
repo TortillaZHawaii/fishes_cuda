@@ -83,8 +83,8 @@
 #define BOID_VERTICES_COUNT (BOID_COUNT * VERTICES_TO_DRAW_PER_BOID)
 
 // constants
-const unsigned int window_width  = 512;
-const unsigned int window_height = 512;
+const unsigned int window_width  = 1024;
+const unsigned int window_height = 1024;
 
 // vbo variables
 GLuint vbo;
@@ -150,7 +150,7 @@ void runCpu();
 void runCuda(struct cudaGraphicsResource **vbo_resource);
 void checkResultCuda(int argc, char **argv, const GLuint &vbo);
 
-const char *sSDKsample = "fishes";
+const char *sSDKsample = "Fishes";
 
 void launch_kernel(BoidSoA boidsoa, float4 *pos, float time)
 {
@@ -171,8 +171,15 @@ int main(int argc, char **argv)
 
     printf("%s starting...\n", sSDKsample);
 
+#ifdef CPU
+    printf("Running CPU version...\n");
+    printf("Boid count: %d\n", BOID_COUNT);
+#else
+    printf("Running GPU version...\n");
     printf("Boid count: %d, blocks count: %d, threads per block: %d\n",
         BOID_COUNT, BLOCKS_COUNT, THREADS_PER_BLOCK);
+#endif
+
 
     printf("\n");
 
@@ -244,7 +251,11 @@ bool runTest(int argc, char **argv, char *ref_file)
 {
     // Create the CUTIL timer
     sdkCreateTimer(&timer);
+#ifdef GPU
     createBoids(&g_boids);
+#else
+    createBoidsCPU(&g_boids);
+#endif
 
     // use command-line specified CUDA device, otherwise use device with highest Gflops/s
     int devID = findCudaDevice(argc, (const char **)argv);
@@ -300,8 +311,10 @@ void runCuda(struct cudaGraphicsResource **vbo_resource)
 
 void runCpu()
 {
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
     // map OpenGL buffer object for writing on CPU
-    float4 *dptr = (float4*)glMapBuffer(vbo, GL_READ_WRITE);
+    void *dptr = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 
     if(dptr == nullptr)
     {
@@ -311,11 +324,12 @@ void runCpu()
 
     if(isActive)
     {
-        h_steerBoid(g_boids, dptr, animationSpeed, BOID_COUNT, separationWeight,
+        h_steerBoid(g_boids, (float4*)dptr, animationSpeed, BOID_COUNT, separationWeight,
             alignmentWeight, cohesionWeight);
     }
 
-    glUnmapBuffer(vbo);
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
@@ -414,7 +428,11 @@ void cleanup()
         deleteVBO(&vbo, cuda_vbo_resource);
     }
 
+#ifdef GPU
     freeBoids(&g_boids);
+#else
+    freeBoidsCPU(&g_boids);
+#endif // GPU
 }
 
 // called when a key is pressed

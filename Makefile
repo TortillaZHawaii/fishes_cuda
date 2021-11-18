@@ -5,7 +5,7 @@ CU_LIBS=-I"/usr/local/cuda/samples/common/inc"
 
 LDLIBS=${GLUT_LIBS} ${CU_LIBS}
 
-FILES=main.o d_drawing.o floatmath.o boid.o
+FILES=main.o d_drawing.o h_drawing.o floatmath.o boid.o
 
 
 all: fishes

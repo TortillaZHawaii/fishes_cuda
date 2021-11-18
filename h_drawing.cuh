@@ -2,7 +2,7 @@
 #define H_DRAWING_H
 #include "boid.cuh"
 
-void createBoids(BoidSoA *boids);
-void freeBoids(BoidSoA* boids);
+void createBoidsCPU(BoidSoA *boids);
+void freeBoidsCPU(BoidSoA* boids);
 
 #endif // H_DRAWING_H

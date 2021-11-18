@@ -1,13 +1,14 @@
 #include "h_drawing.cuh"
 
+#include <stdio.h>
 #include <vector_types.h>
 #include <helper_math.h>
 #include "defines.cuh"
 
-void randomizeBoids(BoidSoA* boids);
+void randomizeBoidsCPU(BoidSoA* boids);
 
 // allocates memory for boids on GPU and initializes them with random values
-void createBoids(BoidSoA *boids)
+void createBoidsCPU(BoidSoA *boids)
 {
     boids->positionsX = (float*)malloc(sizeof(float) * BOID_COUNT);
     boids->positionsY = (float*)malloc(sizeof(float) * BOID_COUNT);
@@ -32,11 +33,11 @@ void createBoids(BoidSoA *boids)
         exit(EXIT_FAILURE);
     }
 
-    randomizeBoids(boids);
+    randomizeBoidsCPU(boids);
 }
 
 // generates random values for boids on CPU and copies them to GPU
-void randomizeBoids(BoidSoA* boids)
+void randomizeBoidsCPU(BoidSoA* boids)
 {
     const float max_velocity = 0.2f;
     const float min_mass = 0.5f;
@@ -64,7 +65,7 @@ void randomizeBoids(BoidSoA* boids)
 }
 
 // frees GPU memory
-void freeBoids(BoidSoA* boids)
+void freeBoidsCPU(BoidSoA* boids)
 {
     free(boids->positionsX);
     free(boids->positionsY);
